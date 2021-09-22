@@ -11,6 +11,8 @@ class Payments(models.Model):
     index = models.IntegerField()
     chan_out = models.IntegerField(null=True)
     chan_out_alias = models.CharField(null=True, max_length=32)
+    keysend_preimage = models.CharField(null=True, max_length=64)
+    message = models.CharField(null=True, max_length=200)
     class Meta:
         app_label = 'gui'
 
@@ -37,6 +39,8 @@ class Invoices(models.Model):
     state = models.IntegerField()
     chan_in = models.IntegerField(null=True)
     chan_in_alias = models.CharField(null=True, max_length=32)
+    keysend_preimage = models.CharField(null=True, max_length=64)
+    message = models.CharField(null=True, max_length=200)
     class Meta:
         app_label = 'gui'
 
@@ -68,6 +72,17 @@ class Channels(models.Model):
     is_active = models.BooleanField()
     is_open = models.BooleanField()
     auto_rebalance = models.BooleanField(default=False)
+    class Meta:
+        app_label = 'gui'
+
+class Peers(models.Model):
+    pubkey = models.CharField(max_length=66, primary_key=True)
+    address = models.CharField(max_length=100)
+    sat_sent = models.BigIntegerField()
+    sat_recv = models.BigIntegerField()
+    inbound = models.BooleanField()
+    connected = models.BooleanField()
+    last_reconnected = models.DateTimeField(null=True, default=None)
     class Meta:
         app_label = 'gui'
 

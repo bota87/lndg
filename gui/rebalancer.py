@@ -1,13 +1,12 @@
 import os, codecs, django, grpc, json, datetime
 from django.conf import settings
-from django.utils import timezone
 from django.db.models import Sum
 from pathlib import Path
 from datetime import datetime
-import rpc_pb2 as ln
-import rpc_pb2_grpc_jobs as lnrpc
-import router_pb2_rebalancer as lnr
-import router_pb2_grpc_rebalancer as lnrouter
+from lnd_deps import lightning_pb2 as ln
+from lnd_deps import lightning_pb2_grpc as lnrpc
+from lnd_deps import router_pb2 as lnr
+from lnd_deps import router_pb2_grpc as lnrouter
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 settings.configure(
@@ -16,8 +15,7 @@ settings.configure(
             'ENGINE': 'django.db.backends.sqlite3',
             'NAME': BASE_DIR / 'db.sqlite3'
         }
-    },
-    TIME_ZONE = 'America/New_York'
+    }
 )
 django.setup()
 from models import Rebalancer, Channels, LocalSettings
@@ -43,14 +41,15 @@ def run_rebalancer(rebalance):
         unknown_errors = Rebalancer.objects.filter(status=1)
         for unknown_error in unknown_errors:
             unknown_error.status = 400
-            unknown_error.stop = timezone.now()
+            unknown_error.stop = datetime.now()
             unknown_error.save()
-    rebalance.start = timezone.now()
+    rebalance.start = datetime.now()
     rebalance.save()
     try:
         #Open connection with lnd via grpc
-        stub = lnrpc.LightningStub(lnd_connect())
-        routerstub = lnrouter.RouterStub(lnd_connect())
+        connection = lnd_connect()
+        stub = lnrpc.LightningStub(connection)
+        routerstub = lnrouter.RouterStub(connection)
         chan_ids = json.loads(rebalance.outgoing_chan_ids)
         timeout = rebalance.duration * 60
         response = stub.AddInvoice(ln.Invoice(value=rebalance.value, expiry=timeout))
@@ -79,12 +78,14 @@ def run_rebalancer(rebalance):
                 elif response.failure_reason == 5:
                     #FAILURE_REASON_INSUFFICIENT_BALANCE
                     rebalance.status = 7
+            elif response.status == 0:
+                rebalance.status == 400
     except Exception as e:
         rebalance.status = 400
         error = str(e)
         print(error)
     finally:
-        rebalance.stop = timezone.now()
+        rebalance.stop = datetime.now()
         rebalance.save()
 
 def auto_schedule():
@@ -128,20 +129,30 @@ def auto_schedule():
                 # TLDR: lets target a custom % of the amount that would bring us back to a 50/50 channel balance using the MaxFeerate to calculate sat fee intervals
                 for target in inbound_cans:
                     target_fee_rate = int(target.fee_rate * max_cost)
-                    value_per_fee = int(1 / (target_fee_rate / 1000000)) if target_fee_rate <= max_fee_rate else int(1 / (max_fee_rate / 1000000))
-                    target_value = int(((target.capacity * 0.5) * target_percent) / value_per_fee) * value_per_fee
-                    if target_value >= value_per_fee:
-                        if LocalSettings.objects.filter(key='AR-Time').exists():
-                            target_time = int(LocalSettings.objects.filter(key='AR-Time')[0].value)
-                        else:
-                            LocalSettings(key='AR-Time', value='10').save()
-                            target_time = 10
-                        inbound_pubkey = Channels.objects.filter(chan_id=target.chan_id)[0]
-                        # TLDR: willing to pay 1 sat for every value_per_fee sats moved
-                        target_fee = int(target_value * (1 / value_per_fee))
-                        if Rebalancer.objects.filter(last_hop_pubkey=inbound_pubkey.remote_pubkey).exclude(status=0).exists():
-                            last_rebalance = Rebalancer.objects.filter(last_hop_pubkey=inbound_pubkey.remote_pubkey).exclude(status=0).order_by('-id')[0]
-                            if last_rebalance.value != target_value or last_rebalance.status in [2, 6] or (last_rebalance.status in [3, 4, 400] and (int((datetime.now() - last_rebalance.stop).total_seconds() / 60) > 30)):
+                    if target_fee_rate > 0:
+                        value_per_fee = int(1 / (target_fee_rate / 1000000)) if target_fee_rate <= max_fee_rate else int(1 / (max_fee_rate / 1000000))
+                        target_value = int(((target.capacity * 0.5) * target_percent) / value_per_fee) * value_per_fee
+                        if target_value >= value_per_fee:
+                            if LocalSettings.objects.filter(key='AR-Time').exists():
+                                target_time = int(LocalSettings.objects.filter(key='AR-Time')[0].value)
+                            else:
+                                LocalSettings(key='AR-Time', value='10').save()
+                                target_time = 10
+                            inbound_pubkey = Channels.objects.filter(chan_id=target.chan_id)[0]
+                            # TLDR: willing to pay 1 sat for every value_per_fee sats moved
+                            target_fee = int(target_value * (1 / value_per_fee))
+                            if Rebalancer.objects.filter(last_hop_pubkey=inbound_pubkey.remote_pubkey).exclude(status=0).exists():
+                                last_rebalance = Rebalancer.objects.filter(last_hop_pubkey=inbound_pubkey.remote_pubkey).exclude(status=0).order_by('-id')[0]
+                                if last_rebalance.value != target_value or last_rebalance.status in [2, 6] or (last_rebalance.status in [3, 4, 400] and (int((datetime.now() - last_rebalance.stop).total_seconds() / 60) > 30)):
+                                    print('Creating Auto Rebalance Request')
+                                    print('Request for:', target.chan_id)
+                                    print('Request routing through:', outbound_cans)
+                                    print('Target % Of Value:', target_percent)
+                                    print('Target Value:', target_value)
+                                    print('Target Fee:', target_fee)
+                                    print('Target Time:', target_time)
+                                    Rebalancer(value=target_value, fee_limit=target_fee, outgoing_chan_ids=outbound_cans, last_hop_pubkey=inbound_pubkey.remote_pubkey, duration=target_time).save()
+                            else:
                                 print('Creating Auto Rebalance Request')
                                 print('Request for:', target.chan_id)
                                 print('Request routing through:', outbound_cans)
@@ -150,15 +161,6 @@ def auto_schedule():
                                 print('Target Fee:', target_fee)
                                 print('Target Time:', target_time)
                                 Rebalancer(value=target_value, fee_limit=target_fee, outgoing_chan_ids=outbound_cans, last_hop_pubkey=inbound_pubkey.remote_pubkey, duration=target_time).save()
-                        else:
-                            print('Creating Auto Rebalance Request')
-                            print('Request for:', target.chan_id)
-                            print('Request routing through:', outbound_cans)
-                            print('Target % Of Value:', target_percent)
-                            print('Target Value:', target_value)
-                            print('Target Fee:', target_fee)
-                            print('Target Time:', target_time)
-                            Rebalancer(value=target_value, fee_limit=target_fee, outgoing_chan_ids=outbound_cans, last_hop_pubkey=inbound_pubkey.remote_pubkey, duration=target_time).save()
 
 def main():
     rebalances = Rebalancer.objects.filter(status=0).order_by('id')

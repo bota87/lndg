@@ -1,12 +1,13 @@
-import os, codecs, django, grpc
+import django
 from django.conf import settings
 from django.db.models import Max
 from pathlib import Path
 from datetime import datetime
-from lnd_deps import lightning_pb2 as ln
-from lnd_deps import lightning_pb2_grpc as lnrpc
+from gui.lnd_deps import lightning_pb2 as ln
+from gui.lnd_deps import lightning_pb2_grpc as lnrpc
+from gui.lnd_deps.lnd_connect import lnd_connect
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent
 settings.configure(
     DATABASES = {
         'default': {
@@ -16,7 +17,8 @@ settings.configure(
     }
 )
 django.setup()
-from models import Payments, PaymentHops, Invoices, Forwards, Channels, Peers
+from lndg import settings
+from gui.models import Payments, PaymentHops, Invoices, Forwards, Channels, Peers
 
 def update_payments(stub):
     #Remove anything in-flight so we can get most up to date status
@@ -87,7 +89,7 @@ def update_invoices(stub):
     invoices = stub.ListInvoices(ln.ListInvoiceRequest(index_offset=records, num_max_invoices=100)).invoices
     for invoice in invoices:
         if invoice.state == 1:
-            alias = Channels.objects.filter(chan_id=invoice.htlcs[0].chan_id)[0].alias
+            alias = Channels.objects.filter(chan_id=invoice.htlcs[0].chan_id)[0].alias if Channels.objects.filter(chan_id=invoice.htlcs[0].chan_id).exists() else None
             records = invoice.htlcs[0].custom_records
             keysend_preimage = records[5482373484].hex() if 5482373484 in records else None
             message = records[34349334].decode('utf-8', errors='ignore')[:200] if 34349334 in records else None
@@ -99,8 +101,8 @@ def update_forwards(stub):
     records = Forwards.objects.count()
     forwards = stub.ForwardingHistory(ln.ForwardingHistoryRequest(start_time=1420070400, index_offset=records, num_max_events=100)).forwarding_events
     for forward in forwards:
-        incoming_peer_alias = Channels.objects.filter(chan_id=forward.chan_id_in)[0].alias
-        outgoing_peer_alias = Channels.objects.filter(chan_id=forward.chan_id_out)[0].alias
+        incoming_peer_alias = Channels.objects.filter(chan_id=forward.chan_id_in)[0].alias if Channels.objects.filter(chan_id=forward.chan_id_in).exists() else None
+        outgoing_peer_alias = Channels.objects.filter(chan_id=forward.chan_id_out)[0].alias if Channels.objects.filter(chan_id=forward.chan_id_out).exists() else None
         Forwards(forward_date=datetime.fromtimestamp(forward.timestamp), chan_id_in=forward.chan_id_in, chan_id_out=forward.chan_id_out, chan_in_alias=incoming_peer_alias, chan_out_alias=outgoing_peer_alias, amt_in_msat=forward.amt_in_msat, amt_out_msat=forward.amt_out_msat, fee=round(forward.fee_msat/1000, 3)).save()
 
 def update_channels(stub):
@@ -108,18 +110,26 @@ def update_channels(stub):
     chan_list = []
     channels = stub.ListChannels(ln.ListChannelsRequest()).channels
     for channel in channels:
-        exists = 1 if Channels.objects.filter(chan_id=channel.chan_id).count() == 1 else 0
+        exists = Channels.objects.filter(chan_id=channel.chan_id).count()
         if exists == 1:
             #Update the channel record with the most current data
             chan_data = stub.GetChanInfo(ln.ChanInfoRequest(chan_id=channel.chan_id))
-            policy = chan_data.node2_policy if chan_data.node1_pub == channel.remote_pubkey else chan_data.node1_policy
+            if chan_data.node1_pub == channel.remote_pubkey:
+                local_policy = chan_data.node2_policy
+                remote_policy = chan_data.node1_policy
+            else:
+                local_policy = chan_data.node1_policy
+                remote_policy = chan_data.node2_policy
             db_channel = Channels.objects.filter(chan_id=channel.chan_id)[0]
             db_channel.capacity = channel.capacity
             db_channel.local_balance = channel.local_balance
             db_channel.remote_balance = channel.remote_balance
             db_channel.unsettled_balance = channel.unsettled_balance
-            db_channel.base_fee = policy.fee_base_msat
-            db_channel.fee_rate = policy.fee_rate_milli_msat
+            db_channel.local_commit = channel.commit_fee
+            db_channel.local_base_fee = local_policy.fee_base_msat
+            db_channel.local_fee_rate = local_policy.fee_rate_milli_msat
+            db_channel.remote_base_fee = remote_policy.fee_base_msat
+            db_channel.remote_fee_rate = remote_policy.fee_rate_milli_msat
             db_channel.is_active = channel.active
             db_channel.is_open = True
             db_channel.save()
@@ -127,10 +137,16 @@ def update_channels(stub):
             #Create a record for this new channel
             alias = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=channel.remote_pubkey)).node.alias
             chan_data = stub.GetChanInfo(ln.ChanInfoRequest(chan_id=channel.chan_id))
-            policy = chan_data.node2_policy if chan_data.node1_pub == channel.remote_pubkey else chan_data.node1_policy
+            if chan_data.node1_pub == channel.remote_pubkey:
+                local_policy = chan_data.node2_policy
+                remote_policy = chan_data.node1_policy
+            else:
+                local_policy = chan_data.node1_policy
+                remote_policy = chan_data.node2_policy
             channel_point = channel.channel_point
             txid, index = channel_point.split(':')
-            Channels(remote_pubkey=channel.remote_pubkey, chan_id=channel.chan_id, funding_txid=txid, output_index=index, capacity=channel.capacity, local_balance=channel.local_balance, remote_balance=channel.remote_balance, unsettled_balance=channel.unsettled_balance, initiator=channel.initiator, alias=alias, base_fee=policy.fee_base_msat, fee_rate=policy.fee_rate_milli_msat, is_active=channel.active, is_open=True).save()
+            local_commit = channel.commit_fee
+            Channels(remote_pubkey=channel.remote_pubkey, chan_id=channel.chan_id, funding_txid=txid, output_index=index, capacity=channel.capacity, local_balance=channel.local_balance, remote_balance=channel.remote_balance, unsettled_balance=channel.unsettled_balance, local_commit=local_commit, initiator=channel.initiator, alias=alias, local_base_fee=local_policy.fee_base_msat, local_fee_rate=local_policy.fee_rate_milli_msat, remote_base_fee=remote_policy.fee_base_msat, remote_fee_rate=remote_policy.fee_rate_milli_msat, is_active=channel.active, is_open=True).save()
         counter += 1
         chan_list.append(channel.chan_id)
     records = Channels.objects.filter(is_open=True).count()
@@ -190,23 +206,8 @@ def reconnect_peers(stub):
                     peer.last_reconnected = datetime.now()
                     peer.save()
 
-def lnd_connect():
-    #Open connection with lnd via grpc
-    with open(os.path.expanduser('~/.lnd/data/chain/bitcoin/mainnet/admin.macaroon'), 'rb') as f:
-        macaroon_bytes = f.read()
-        macaroon = codecs.encode(macaroon_bytes, 'hex')
-    def metadata_callback(context, callback):
-        callback([('macaroon', macaroon)], None)
-    os.environ["GRPC_SSL_CIPHER_SUITES"] = 'HIGH+ECDSA'
-    cert = open(os.path.expanduser('~/.lnd/tls.cert'), 'rb').read()
-    cert_creds = grpc.ssl_channel_credentials(cert)
-    auth_creds = grpc.metadata_call_credentials(metadata_callback)
-    creds = grpc.composite_channel_credentials(cert_creds, auth_creds)
-    channel = grpc.secure_channel('localhost:10009', creds)
-    return channel
-
 def main():
-    stub = lnrpc.LightningStub(lnd_connect())
+    stub = lnrpc.LightningStub(lnd_connect(settings.LND_DIR_PATH, settings.LND_NETWORK, settings.LND_RPC_SERVER))
     #Update data
     update_channels(stub)
     update_peers(stub)

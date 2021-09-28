@@ -1,14 +1,15 @@
-import os, codecs, django, grpc, json, datetime
+import django, json, datetime
 from django.conf import settings
 from django.db.models import Sum
 from pathlib import Path
 from datetime import datetime
-from lnd_deps import lightning_pb2 as ln
-from lnd_deps import lightning_pb2_grpc as lnrpc
-from lnd_deps import router_pb2 as lnr
-from lnd_deps import router_pb2_grpc as lnrouter
+from gui.lnd_deps import lightning_pb2 as ln
+from gui.lnd_deps import lightning_pb2_grpc as lnrpc
+from gui.lnd_deps import router_pb2 as lnr
+from gui.lnd_deps import router_pb2_grpc as lnrouter
+from gui.lnd_deps.lnd_connect import lnd_connect
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent
 settings.configure(
     DATABASES = {
         'default': {
@@ -18,23 +19,8 @@ settings.configure(
     }
 )
 django.setup()
-from models import Rebalancer, Channels, LocalSettings
-
-#Define lnd connection for repeated use
-def lnd_connect():
-    #Open connection with lnd via grpc
-    with open(os.path.expanduser('~/.lnd/data/chain/bitcoin/mainnet/admin.macaroon'), 'rb') as f:
-        macaroon_bytes = f.read()
-        macaroon = codecs.encode(macaroon_bytes, 'hex')
-    def metadata_callback(context, callback):
-        callback([('macaroon', macaroon)], None)
-    os.environ["GRPC_SSL_CIPHER_SUITES"] = 'HIGH+ECDSA'
-    cert = open(os.path.expanduser('~/.lnd/tls.cert'), 'rb').read()
-    cert_creds = grpc.ssl_channel_credentials(cert)
-    auth_creds = grpc.metadata_call_credentials(metadata_callback)
-    creds = grpc.composite_channel_credentials(cert_creds, auth_creds)
-    channel = grpc.secure_channel('localhost:10009', creds)
-    return channel
+from lndg import settings
+from gui.models import Rebalancer, Channels, LocalSettings
 
 def run_rebalancer(rebalance):
     if Rebalancer.objects.filter(status=1).exists():
@@ -47,7 +33,7 @@ def run_rebalancer(rebalance):
     rebalance.save()
     try:
         #Open connection with lnd via grpc
-        connection = lnd_connect()
+        connection = lnd_connect(settings.LND_DIR_PATH, settings.LND_NETWORK, settings.LND_RPC_SERVER)
         stub = lnrpc.LightningStub(connection)
         routerstub = lnrouter.RouterStub(connection)
         chan_ids = json.loads(rebalance.outgoing_chan_ids)
@@ -128,10 +114,10 @@ def auto_schedule():
                     max_cost = 0.25
                 # TLDR: lets target a custom % of the amount that would bring us back to a 50/50 channel balance using the MaxFeerate to calculate sat fee intervals
                 for target in inbound_cans:
-                    target_fee_rate = int(target.fee_rate * max_cost)
+                    target_fee_rate = int(target.local_fee_rate * max_cost)
                     if target_fee_rate > 0:
                         value_per_fee = int(1 / (target_fee_rate / 1000000)) if target_fee_rate <= max_fee_rate else int(1 / (max_fee_rate / 1000000))
-                        target_value = int(((target.capacity * 0.5) * target_percent) / value_per_fee) * value_per_fee
+                        target_value = int((target.capacity * target_percent) / value_per_fee) * value_per_fee
                         if target_value >= value_per_fee:
                             if LocalSettings.objects.filter(key='AR-Time').exists():
                                 target_time = int(LocalSettings.objects.filter(key='AR-Time')[0].value)
@@ -143,7 +129,7 @@ def auto_schedule():
                             target_fee = int(target_value * (1 / value_per_fee))
                             if Rebalancer.objects.filter(last_hop_pubkey=inbound_pubkey.remote_pubkey).exclude(status=0).exists():
                                 last_rebalance = Rebalancer.objects.filter(last_hop_pubkey=inbound_pubkey.remote_pubkey).exclude(status=0).order_by('-id')[0]
-                                if last_rebalance.value != target_value or last_rebalance.status in [2, 6] or (last_rebalance.status in [3, 4, 400] and (int((datetime.now() - last_rebalance.stop).total_seconds() / 60) > 30)):
+                                if last_rebalance.value != target_value or last_rebalance.status in [2, 6] or (last_rebalance.status in [3, 4, 5, 7, 400] and (int((datetime.now() - last_rebalance.stop).total_seconds() / 60) > 30)) or (last_rebalance.status == 1 and (int((datetime.now() - last_rebalance.start).total_seconds() / 60) > 30)):
                                     print('Creating Auto Rebalance Request')
                                     print('Request for:', target.chan_id)
                                     print('Request routing through:', outbound_cans)

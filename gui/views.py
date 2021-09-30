@@ -408,6 +408,7 @@ class ForwardsViewSet(viewsets.ReadOnlyModelViewSet):
 class ChannelsViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Channels.objects.all()
     serializer_class = ChannelSerializer
+    filterset_fields = ['is_open', 'is_active']
 
 class RebalancerViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Rebalancer.objects.all()

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import ReactDOM from "react-dom";
 import {ChakraProvider, Table, Thead, Tbody, Tr, Th, Td, TableCaption, Progress, Button } from "@chakra-ui/react"
 
-function App() {
+function Home() {
   const [channels, setData1] = useState(null);
   const [forwards, setData2] = useState(null);
 
@@ -10,7 +10,7 @@ function App() {
     fetch("http://127.0.0.1:8000/api/channels/?is_open=true&is_active=true")
       .then(res => res.json())
       .then(channels => setData1(channels.results));
-    fetch("http://127.0.0.1:8000/api/forwards/?limit=5")
+    fetch("http://127.0.0.1:8000/api/forwards/?limit=10")
       .then(res => res.json())
       .then(forwards => setData2(forwards.results));
   }, []);
@@ -22,12 +22,10 @@ function App() {
   if (!forwards) {
       return <div>Loading...</div>;
   }
-  function divide([num1, num2]){
-    return num1 / num2;
-}
+
   return (
-    <div className="App">
-      <div>
+    <div class="Home">
+      <div class="Channels">
         <Table size="sm" variant="striped" colorScheme="gray">
           <TableCaption placement="top">Channels</TableCaption>
           <Thead>
@@ -37,7 +35,7 @@ function App() {
               <Th>Peer Alias</Th>
               <Th isNumeric>Capacity</Th>
               <Th isNumeric>Outbound Liquidity</Th>
-              <Th>|----------------------------------------Visualize----------------------------------------|</Th>
+              <Th width="15%">Visualize</Th>
               <Th isNumeric>Inbound Liquidity</Th>
               <Th isNumeric>Unsettled Liquidity</Th>
               <Th isNumeric>Local Base Fee</Th>
@@ -67,7 +65,7 @@ function App() {
           </Tbody>
         </Table>
       </div>
-      <div>
+      <div class="Forwards">
         <Table size="sm" variant="striped" colorScheme="gray">
           <TableCaption placement="top">Forwards</TableCaption>
           <Thead>
@@ -92,4 +90,4 @@ function App() {
 }
 
 const rootElement = document.getElementById("app");
-ReactDOM.render(<ChakraProvider><App /></ChakraProvider>, rootElement);
+ReactDOM.render(<ChakraProvider><Home /></ChakraProvider>, rootElement);

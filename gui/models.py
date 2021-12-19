@@ -12,7 +12,7 @@ class Payments(models.Model):
     chan_out = models.IntegerField(null=True)
     chan_out_alias = models.CharField(null=True, max_length=32)
     keysend_preimage = models.CharField(null=True, max_length=64)
-    message = models.CharField(null=True, max_length=200)
+    message = models.CharField(null=True, max_length=255)
     class Meta:
         app_label = 'gui'
 
@@ -40,7 +40,7 @@ class Invoices(models.Model):
     chan_in = models.IntegerField(null=True)
     chan_in_alias = models.CharField(null=True, max_length=32)
     keysend_preimage = models.CharField(null=True, max_length=64)
-    message = models.CharField(null=True, max_length=200)
+    message = models.CharField(null=True, max_length=255)
     class Meta:
         app_label = 'gui'
 
@@ -76,6 +76,7 @@ class Channels(models.Model):
     is_active = models.BooleanField()
     is_open = models.BooleanField()
     auto_rebalance = models.BooleanField(default=False)
+    ar_target = models.IntegerField(default=100)
     class Meta:
         app_label = 'gui'
 
@@ -96,15 +97,53 @@ class Rebalancer(models.Model):
     fee_limit = models.IntegerField()
     outgoing_chan_ids = models.TextField(default='[]')
     last_hop_pubkey = models.CharField(default='', max_length=66)
+    target_alias = models.CharField(default='', max_length=32)
     duration = models.IntegerField()
     start = models.DateTimeField(null=True, default=None)
     stop = models.DateTimeField(null=True, default=None)
     status = models.IntegerField(default=0)
+    payment_hash = models.CharField(max_length=64, null=True, default=None)
     class Meta:
         app_label = 'gui'
 
 class LocalSettings(models.Model):
     key = models.CharField(primary_key=True, default=None, max_length=20)
     value = models.CharField(default=None, max_length=50)
+    class Meta:
+        app_label = 'gui'
+
+class Onchain(models.Model):
+    tx_hash = models.CharField(max_length=64, primary_key=True)
+    amount = models.BigIntegerField()
+    block_hash = models.CharField(max_length=64)
+    block_height = models.IntegerField()
+    time_stamp = models.DateTimeField()
+    fee = models.IntegerField()
+    label = models.CharField(max_length=100)
+    class Meta:
+        app_label = 'gui'
+
+class PendingHTLCs(models.Model):
+    chan_id = models.IntegerField()
+    alias = models.CharField(max_length=32)
+    incoming = models.BooleanField()
+    amount = models.BigIntegerField()
+    hash_lock = models.CharField(max_length=64)
+    expiration_height = models.IntegerField()
+    forwarding_channel = models.IntegerField()
+    forwarding_alias = models.CharField(max_length=32)
+    class Meta:
+        app_label = 'gui'
+
+class FailedHTLCs(models.Model):
+    timestamp = models.DateTimeField(default=timezone.now)
+    amount = models.IntegerField()
+    chan_id_in = models.IntegerField()
+    chan_id_out = models.IntegerField()
+    chan_in_alias = models.CharField(null=True, max_length=32)
+    chan_out_alias = models.CharField(null=True, max_length=32)
+    wire_failure = models.IntegerField()
+    failure_detail = models.IntegerField()
+    missed_fee = models.FloatField()
     class Meta:
         app_label = 'gui'

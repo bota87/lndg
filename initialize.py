@@ -1,14 +1,13 @@
 import secrets, argparse
+from pathlib import Path
 
-def write_settings(node_ip, lnd_dir_path, lnd_network, lnd_rpc_server, whitenoise):
+def write_settings(node_ip, lnd_dir_path, lnd_network, lnd_rpc_server, whitenoise, debug):
     #Generate a unique secret to be used for your django site
     secret = secrets.token_urlsafe(64)
     if whitenoise:
-        sfl = '#'
         wnl = """
     'whitenoise.middleware.WhiteNoiseMiddleware',"""
     else:
-        sfl = ''
         wnl = ''
     settings_file = '''"""
 Django settings for lndg project.
@@ -35,7 +34,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = '%s'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = %s
 
 ALLOWED_HOSTS = ['%s']
 
@@ -50,7 +49,7 @@ INSTALLED_APPS = [
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
-    %s'django.contrib.staticfiles',
+    'django.contrib.staticfiles',
     'django.contrib.humanize',
     'gui',
     'rest_framework',
@@ -140,12 +139,13 @@ USE_TZ = False
 STATIC_URL = 'static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'gui/static/')
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-''' % (secret, node_ip, lnd_dir_path, lnd_network, lnd_rpc_server, sfl, wnl)
+''' % (secret, debug, node_ip, lnd_dir_path, lnd_network, lnd_rpc_server, wnl)
     try:
         f = open("lndg/settings.py", "x")
         f.close()
     except:
         print('A settings file may already exist, please double check.')
+        return
     try:
         f = open("lndg/settings.py", "w")
         f.write(settings_file)
@@ -154,6 +154,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
         print('Error creating the settings file:', e)
 
 def write_supervisord_settings():
+    target_path = Path(__file__).resolve().parent
     supervisord_secret = secrets.token_urlsafe(16)
     supervisord_settings_file = '''[supervisord]
 user=root
@@ -183,28 +184,39 @@ supervisor.rpcinterface_factory=supervisor.rpcinterface:make_main_rpcinterface
 [program:jobs]
 command = sh -c "python jobs.py && sleep 15"
 process_name = lndg-jobs
-directory = /lndg
+directory = %s
 autorestart = true
 redirect_stderr = true
-stdout_logfile = /var/log/lnd-jobs.log
+stdout_logfile = /var/log/lndg-jobs.log
 stdout_logfile_maxbytes = 150MB
 stdout_logfile_backups = 15
 
 [program:rebalancer]
 command = sh -c "python rebalancer.py && sleep 15"
 process_name = lndg-rebalancer
-directory = /lndg
+directory = %s
 autorestart = true
 redirect_stderr = true
-stdout_logfile = /var/log/lnd-rebalancer.log
+stdout_logfile = /var/log/lndg-rebalancer.log
 stdout_logfile_maxbytes = 150MB
 stdout_logfile_backups = 15
-''' % (supervisord_secret, supervisord_secret)
+
+[program:htlc-stream]
+command = sh -c "python htlc_stream.py && sleep 15"
+process_name = lndg-htlc-stream
+directory = %s
+autorestart = true
+redirect_stderr = true
+stdout_logfile = /var/log/lndg-htlc-stream.log
+stdout_logfile_maxbytes = 150MB
+stdout_logfile_backups = 15
+''' % (supervisord_secret, supervisord_secret, target_path, target_path, target_path)
     try:
         f = open("/usr/local/etc/supervisord.conf", "x")
         f.close()
     except:
         print('A supervisord settings file may already exist, please double check.')
+        return
     try:
         f = open("/usr/local/etc/supervisord.conf", "w")
         f.write(supervisord_settings_file)
@@ -222,6 +234,7 @@ def main():
     parser.add_argument('-sd', '--supervisord', help = 'Setup supervisord to run jobs/rebalancer background processes', action='store_true')
     parser.add_argument('-wn', '--whitenoise', help = 'Add whitenoise middleware (docker requirement for static files)', action='store_true')
     parser.add_argument('-d', '--docker', help = 'Single option for docker container setup (supervisord + whitenoise)', action='store_true')
+    parser.add_argument('-dx', '--debug', help = 'Setup the django site in debug mode', action='store_true')
     args = parser.parse_args()
     node_ip = args.nodeip
     lnd_dir_path = args.lnddir
@@ -230,10 +243,11 @@ def main():
     setup_supervisord = args.supervisord
     whitenoise = args.whitenoise
     docker = args.docker
+    debug = args.debug
     if docker:
         setup_supervisord = True
         whitenoise = True
-    write_settings(node_ip, lnd_dir_path, lnd_network, lnd_rpc_server, whitenoise)
+    write_settings(node_ip, lnd_dir_path, lnd_network, lnd_rpc_server, whitenoise, debug)
     if setup_supervisord:
         print('Supervisord setup requested...')
         write_supervisord_settings()

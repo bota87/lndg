@@ -1,60 +1,181 @@
-# lndg
+# LNDg
 Lite GUI web interface to analyze lnd data and manage your node with automation.
 
+Start by choosing one of the following installation methods:  
+[Docker Installation](https://github.com/cryptosharks131/lndg#docker-installation-requires-docker-and-docker-compose-be-installed) | [Umbrel Installation](https://github.com/cryptosharks131/lndg#umbrel-installation) | [Manual Installation](https://github.com/cryptosharks131/lndg#manual-installation)
+
+## Docker Installation (requires docker and docker-compose be installed)
+### Build and deploy
+1. Clone respository `git clone https://github.com/cryptosharks131/lndg.git`
+2. Change directory into the repo `cd lndg`
+3. Customize `docker-compose.yaml` if you like and then build/deploy your docker image: `docker-compose up -d`
+4. LNDg should now be available on port `8889`
+
+### Updating
+```
+docker-compose down
+docker-compose build --no-cache
+docker-compose up -d
+```
+
+### Notes
+1. Unless you save your `db.sqlite3` file before destroying your container, this data will be lost and rebuilt when making a new container. However, some data such as rebalances from previous containers cannot be rebuilt.
+2. You can make this file persist by initializing it first locally `touch /root/lndg/db.sqlite3` and then mapping it locally in your docker-compose file under the volumes. `/root/lndg/db.sqlite3:/lndg/db.sqlite3:rw`
+
+## Umbrel Installation
+### Build and deploy
+1. Log into your umbrel via ssh
+2. Clone respository `git clone https://github.com/cryptosharks131/lndg.git`
+3. Change directory `cd lndg`
+4. Initialize the database file `touch db.sqlite3`
+5. Copy and replace the contents of the docker-compose.yaml with the below: `nano docker-compose.yaml`
+```
+services:
+  lndg:
+    build: .
+    volumes:
+      - /home/umbrel/umbrel/lnd:/root/.lnd:ro
+      - /home/umbrel/lndg/db.sqlite3:/lndg/db.sqlite3:rw
+    command:
+      - sh
+      - -c
+      - python initialize.py -net 'mainnet' -server '10.21.21.9:10009' -d && python manage.py migrate && python manage.py collectstatic --no-input && supervisord && python manage.py runserver 0.0.0.0:8000
+    ports:
+      - 8889:8000
+networks: 
+  default: 
+    external: true
+    name: umbrel_main_network
+```
+5. Deploy your docker image: `docker-compose up -d`
+6. You can now access LNDg via your browser on port 8889: `http://umbrel.local:8889`
+
+### Updating
+```
+docker-compose down
+docker-compose build --no-cache
+docker-compose up -d
+```
+
 ## Manual Installation
+### Step 1 - Install lndg
 1. Clone respository `git clone https://github.com/cryptosharks131/lndg.git`
 2. Change directory into the repo `cd lndg`
 3. Make sure you have python virtualenv installed `apt install virtualenv`
 4. Setup a python3 virtual environment `virtualenv -p python3 .venv`
 5. Install required dependencies `.venv/bin/pip install -r requirements.txt`
-6. Initialize a settings.py file for your django site `.venv/bin/python initialize.py -net 'mainnet' -server 'localhost:10009'`
+6. Initialize some settings for your django site (see notes below) `.venv/bin/python initialize.py`
 7. Migrate all database objects `.venv/bin/python manage.py migrate`
 8. Generate some initial data for your dashboard `.venv/bin/python jobs.py`
-9. Run the server via chosen webserver or via python development server `.venv/bin/python manage.py runserver <your_node_ip>:80`
+9. Run the server via a python development server `.venv/bin/python manage.py runserver 0.0.0.0:8889`
 
-Note: If you are not using the default path for LND `~/.lnd` or you would like to run a LND instance on a network other than `mainnet` you can add a custom path or specify the desired network (testnet/signet) in the django settings file `lndg/settings.py`
+### Step 2 - Setup Backend Data and Automated Rebalancing
+The files `jobs.py` and `rebalancer.py` inside lndg/gui/ serve to update the backend database with the most up to date information and rebalance any channels based on your lndg dashboard settings and requests. A refresh interval of at least 15-30 seconds is recommended for the best user experience.
 
-## Updating
+Recommend Setup With Supervisord or Systemd
+1. Supervisord  
+  a) Setup supervisord config `.venv/bin/python initialize.py -sd`  
+  b) Install Supervisord `.venv/bin/pip install supervisor`  
+  c) Start Supervisord `supervisord`  
+
+2. Systemd (2 options)  
+  Option 1 - Bash script install `sudo bash systemd.sh`  
+  Option 2 - [Manual Setup Instructions](https://github.com/cryptosharks131/lndg/blob/master/systemd.md)  
+  
+Alternatively, you may also make your own task for these files with your preferred tool (task scheduler/cronjob/etc).  
+
+### Notes
+1. If you are not using the default settings for LND or you would like to run a LND instance on a network other than `mainnet` you can use the correct flags in step 6 (see `initialize.py --help`) or you can edit the variables directly in `lndg/lndg/settings.py`.  
+2. Some systems have a hard time serving static files (docker/macOs) and installing whitenoise and configuring it can help solve this issue. You can use `initialize.py -wn` to setup whitenoise and install it with `.venv/bin/pip install whitenoise`.  
+3. If you want to recreate a settings file, delete it from `lndg/lndg/settings.py` and rerun. `initialize.py`  
+4. If you plan to run this site continuously, consider setting up a proper web server to host it (see Nginx below).  
+
+### Setup lndg initialize.py options
+1. `-ip` or `--nodeip` - Accepts only this host IP to serve the LNDg page - default: `*`
+2. `-dir` or `--lnddir` - LND Directory for tls cert and admin macaroon paths - default: `~/.lnd`
+3. `-net` or `--network` - Network LND will run over - default: `mainnet`
+4. `-server` or `--rpcserver` - Server address to use for rpc communications with LND - default: `localhost:10009`
+5. `-sd` or `--supervisord` - Setup supervisord to run jobs/rebalancer background processes - default: `False`
+6. `-wn` or `--whitenoise` - Add whitenoise middleware (docker requirement for static files) - default: `False`
+7. `-d` or `--docker` - Single option for docker container setup (supervisord + whitenoise) - default: `False`
+8. `-dx` or `--debug` - Setup the django site in debug mode - default: `False`
+
+### Updating
 1. Make sure you are in the lndg folder `cd lndg`
 2. Pull the new files `git pull`
 3. Migrate any database changes `.venv/bin/python manage.py migrate`
 
-## Backend Data Refreshes and Automated Rebalancing
-The files `jobs.py` and `rebalancer.py` inside lndg/gui/ serve to update the backend database with the most up to date information and rebalance any channels based on your lndg dashboard settings and requests. A refresh interval of at least 15-30 seconds is recommended for the best user experience.
-
-You can find instructions on settings these files up to run in the background via systemd [here](https://github.com/cryptosharks131/lndg/blob/master/systemd.md). If you are familiar with crontab, this is also an option for setting up these files to run on a frequent basis, however it only has a resolution of 1 minute.
-
-A bash script has also been included to help aide in the setup of systemd. `sudo bash systemd.sh`
-
-## Nginx Webserver
+### Nginx Webserver
 If you would like to serve the dashboard at all times, it is recommended to setup a proper production webserver to host the site.  
 A bash script has been included to help aide in the setup of a nginx webserver. `sudo bash nginx.sh`
 
-## Docker Installation (this includes backend refreshes and rebalancing)
-1. Clone respository `git clone https://github.com/cryptosharks131/lndg.git`
-2. Change directory into the repo `cd lndg`
-3. Customize `docker-compose.yaml` if you like and then build/deploy your docker image: `docker-compose up -d`
-4. LNDg should now be available on port `8000`
+## Key Features
+### API Backend
+The following data can be accessed at the /api endpoint:  
+`payments`  `paymenthops`  `invoices`  `forwards`  `onchain`  `peers`  `channels`  `rebalancer`  `settings`
 
-Note: Unless you save your `db.sqlite3` file before destroying your container, this data will be lost and rebuilt when making a new container. However, some data such as rebalances from previous containers cannot be rebuilt.
+### Auto-Rebalancer
+Here are some notes to help you get started using the Auto-Rebalancer (AR).
 
-## API Backend
-The following data can be accessed at the /api endpoint: `payments`, `invoices`, `forwards`, `channels`, and `rebalancer`
+The objective of the Auto-Rebalancer is to "refill" the liquidity on the local side (i.e. OUTBOUND) of profitable and lucarative channels.  So that, when a forward comes in from another node there is always enough liquidity to route the payment and in return collect the desired routing fees.
+
+1. The AR variable `AR-Enabled` must be set to 1 (enabled) in order to start looking for new rebalance opportunities.
+2. The AR variable `AR-Target%` defines the % size of the channel capacity you would like to use for rebalance attempts. Example: If a channel size is 1M Sats and AR-Target% = 0.05 LNDg will select an amount of 5% of 1M = 50K for rebalancing.
+3. The AR variable `AR-Time` defines the maximum amount of time we will spend looking for a route. Example: 5 minutes
+4. The AR variable `AR-MaxFeeRate` defines the maximum amount in ppm a rebalance attempt can ever use for a fee limit. This is the maximum limit to ensure the total fee does not exceed this amount. Example: AR-MaxFeeRate = 800 will ensure the rebalance fee is always less than 800 sats.
+5. The AR variable `AR-MaxCost%	` defines the maximum % of the ppm being charged on the `INBOUND` receving channel that will be used as the fee limit for the rebalance attempt. Example: If your fee to node A is 1000ppm and AR-MaxCost% = 0.5 LNDg will use 50% of 1000ppm = 500ppm max fee limit for rebalancing.
+6. The AR variable `AR-Outbound%` helps identify all the channels that would be a candidate for rebalancing targetd channels. Rebalances will only consider any `OUTBOUND` channel that has more outbound liquidity than the current `AR-Outbound%` setting AND the channel is not currently being targeted as an `INBOUND` receving channel for rebalances.  Example: AR-Outboud% = 0.6 would make all channels with an outbound capacity of 60% or more AND not enabled under AR on the channel line to be a candidate for rebalancing. 
+7. Channels need to be targeted in order to be refilled with outbound liquidity and in order to control costs as a first prioirty, all calculations are based on the specific `INBOUND` receving channel.
+8. Enable `INBOUND` receving channels you would like to target and set an inbound liquidity `Target%` on the specific channel. Rebalance attempts will be made until inbound liquidity falls below this channel settting.
+9. The `INBOUND` receving channel is the channel that later routes out real payments and earns back the fees paid. Target channels that have lucrative outbound flows.
+10. Attempts that are successful or attempts with only incorrect payment information are tried again immediately. Example: If a rebalancing for 50k was sucessful, AR will try another 50k immediately with the same parameters.
+11. Attempts that fail for other reasons will not be tried again for 30 minutes after the stop time. This allows the liquidity in the network to move around for 30 mins before trying another rebalancing attempt that previously failed.
+
+#### Steps to start the Auto-Rebalancer:
+1. Update Channel Specific Settings  
+  a. Go to Active Channels section  
+  b. Find the channels you would like to activate for rebalancing (this refills its outbound)  
+  c. On far right column Click the Enable button to activate rebalancing  
+  d. The dashboard will refresh and show AR-Target 100%  
+  e. Adjust the AR-Target to desired % of liquidity you want to keep on remote INBOUND side. Example select 0.60 if you want 60% of the channel capacity on Remote/INBOUND side  which would mean that there is 40% on Local/OUTBOUND side  
+  f. Hit Enter  
+  g. Dashboard will refresh in the browser  
+  h. Make sure you enable all channels that are valuable outbound routes for you to ensure they are not used for filling up routes you have targeted (you can enable and target 100% in order to avoid any action on this channel from the rebalancer)  
+
+2. Update Global Settings  
+  a. Go to section Update Auto Rebalancer Settings  
+  b. Select the global settings (sample below):  
+  c. Click OK button to submit  
+  d. Once enabled is set to 1 in the global settings - the rebalancer will become active
+  ```
+  Enabled: 1
+  Target Amount (%): 0.03
+  Target Time (min): 5
+  Target Outbound Above (%): 0.4
+  Global Max Fee Rate (ppm): 200
+  Max Cost (%): 0.5
+  ```
+3. Go to section Last 10 Rebalance Requests - that will show the list of the rebalancing queue and status.  
+
+If you want a channel not to be picked for rebalancing (i.e. it is already full with OUTBOUND capacity that you desire), enable the channel and set the AR-Target% to 100. The rebalancer will ignore the channel while selecting the channels for outbound candidates and since its INBOUND can never be above 100% it will never trigger a rebalance.  
 
 ## Preview Screens
 ### Main Dashboard
-![image](https://user-images.githubusercontent.com/38626122/132701345-7129e4e5-09b8-483e-96eb-bf003171ed3f.png)
-![image](https://user-images.githubusercontent.com/38626122/132701473-33611c23-cb91-4496-a9ee-c276f1b35f34.png)
-![image](https://user-images.githubusercontent.com/38626122/132701498-5cefa10f-00b3-45e3-9a38-e6512d47b750.png)
-![image](https://user-images.githubusercontent.com/38626122/132701518-41e585ae-bac3-413b-a6a2-c202e20fd7f9.png)
-![image](https://user-images.githubusercontent.com/38626122/132701532-a129f74f-ee6e-4f03-89c8-e82eef775ab1.png)
+![image](https://user-images.githubusercontent.com/38626122/139308280-13b14393-c5f0-4e2a-8acc-9d87f5c83684.png)
+![image](https://user-images.githubusercontent.com/38626122/137809328-c64c038b-8dbb-40a2-aeb3-a1bae5554d7a.png)
+![image](https://user-images.githubusercontent.com/38626122/137809356-ec46193a-478c-424b-a184-2b15cfbb5c52.png)
+![image](https://user-images.githubusercontent.com/38626122/137809433-b363fff1-31b6-4b0e-80e9-1916ef0af052.png)
+![image](https://user-images.githubusercontent.com/38626122/137809648-bb191ba9-b989-4325-95ac-d25a8333ae62.png)
+![image](https://user-images.githubusercontent.com/38626122/137809583-db743233-25c1-4d3e-aaec-2a7767de2c9f.png)
 
-### Peers, Balances and Routes All Open In Separate Screens
-![image](https://user-images.githubusercontent.com/38626122/132701553-bbab3f27-ac72-4de6-9591-506c6740579b.png)
-![image](https://user-images.githubusercontent.com/38626122/132861336-3cb02cad-2b09-4548-8186-a93b2482c40d.png)
+### Peers, Balances, Routes and Pending HTLCs All Open In Separate Screens
+![image](https://user-images.githubusercontent.com/38626122/137809809-1ed40cfb-9d12-447a-8e5e-82ae79605895.png)
+![image](https://user-images.githubusercontent.com/38626122/137810021-4f69dcb0-5fce-4062-bc49-e75f5dd0feda.png)
+![image](https://user-images.githubusercontent.com/38626122/137809882-4a87f86d-290c-456e-9606-ed669fd98561.png)
 
 ### Browsable API at `/api` (json format available with url appended with `?format=json`)
-![image](https://user-images.githubusercontent.com/38626122/134045960-13019cd9-715d-43aa-873d-414626369373.png)
+![image](https://user-images.githubusercontent.com/38626122/137810278-7f38ac5b-8932-4953-aa4c-9c29d66dce0c.png)
 
-### New! View Keysend Messages (you can only receive these if you have `accept-keysend=true` in lnd.conf)
+### View Keysend Messages (you can only receive these if you have `accept-keysend=true` in lnd.conf)
 ![image](https://user-images.githubusercontent.com/38626122/134045287-086d56e3-5959-4f5f-a06e-cb6d2ac4957c.png)
+

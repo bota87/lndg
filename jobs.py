@@ -18,7 +18,7 @@ settings.configure(
 )
 django.setup()
 from lndg import settings
-from gui.models import Payments, PaymentHops, Invoices, Forwards, Channels, Peers
+from gui.models import Payments, PaymentHops, Invoices, Forwards, Channels, Peers, Onchain, PendingHTLCs
 
 def update_payments(stub):
     #Remove anything in-flight so we can get most up to date status
@@ -38,7 +38,7 @@ def update_payments(stub):
                         total_hops = len(hops)
                         for hop in hops:
                             hop_count += 1
-                            alias = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=hop.pub_key)).node.alias
+                            alias = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=hop.pub_key, include_channels=False)).node.alias
                             PaymentHops(payment_hash=new_payment, attempt_id=attempt.attempt_id, step=hop_count, chan_id=hop.chan_id, alias=alias, chan_capacity=hop.chan_capacity, node_pubkey=hop.pub_key, amt=round(hop.amt_to_forward_msat/1000, 3), fee=round(hop.fee_msat/1000, 3)).save()
                             if hop_count == 1:
                                 new_payment.chan_out = hop.chan_id
@@ -46,7 +46,7 @@ def update_payments(stub):
                                 new_payment.save()
                             if hop_count == total_hops and 5482373484 in hop.custom_records:
                                 records = hop.custom_records
-                                message = records[34349334].decode('utf-8', errors='ignore')[:200] if 34349334 in records else None
+                                message = records[34349334].decode('utf-8', errors='ignore')[:255] if 34349334 in records else None
                                 new_payment.keysend_preimage = records[5482373484].hex()
                                 new_payment.message = message
                                 new_payment.save()
@@ -68,7 +68,7 @@ def update_payments(stub):
                         total_hops = len(hops)
                         for hop in hops:
                             hop_count += 1
-                            alias = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=hop.pub_key)).node.alias
+                            alias = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=hop.pub_key, include_channels=False)).node.alias
                             PaymentHops(payment_hash=db_payment, attempt_id=attempt.attempt_id, step=hop_count, chan_id=hop.chan_id, alias=alias, chan_capacity=hop.chan_capacity, node_pubkey=hop.pub_key, amt=round(hop.amt_to_forward_msat/1000, 3), fee=round(hop.fee_msat/1000, 3)).save()
                             if hop_count == 1:
                                 db_payment.chan_out = hop.chan_id
@@ -76,7 +76,7 @@ def update_payments(stub):
                                 db_payment.save()
                             if hop_count == total_hops and 5482373484 in hop.custom_records:
                                 records = hop.custom_records
-                                message = records[34349334].decode('utf-8', errors='ignore')[:200] if 34349334 in records else None
+                                message = records[34349334].decode('utf-8', errors='ignore')[:255] if 34349334 in records else None
                                 db_payment.keysend_preimage = records[5482373484].hex()
                                 db_payment.message = message
                                 db_payment.save()
@@ -92,7 +92,7 @@ def update_invoices(stub):
             alias = Channels.objects.filter(chan_id=invoice.htlcs[0].chan_id)[0].alias if Channels.objects.filter(chan_id=invoice.htlcs[0].chan_id).exists() else None
             records = invoice.htlcs[0].custom_records
             keysend_preimage = records[5482373484].hex() if 5482373484 in records else None
-            message = records[34349334].decode('utf-8', errors='ignore')[:200] if 34349334 in records else None
+            message = records[34349334].decode('utf-8', errors='ignore')[:255] if 34349334 in records else None
             Invoices(creation_date=datetime.fromtimestamp(invoice.creation_date), settle_date=datetime.fromtimestamp(invoice.settle_date), r_hash=invoice.r_hash.hex(), value=round(invoice.value_msat/1000, 3), amt_paid=invoice.amt_paid_sat, state=invoice.state, chan_in=invoice.htlcs[0].chan_id, chan_in_alias=alias, keysend_preimage=keysend_preimage, message=message).save()
         else:
             Invoices(creation_date=datetime.fromtimestamp(invoice.creation_date), r_hash=invoice.r_hash.hex(), value=round(invoice.value_msat/1000, 3), amt_paid=invoice.amt_paid_sat, state=invoice.state).save()
@@ -109,41 +109,14 @@ def update_channels(stub):
     counter = 0
     chan_list = []
     channels = stub.ListChannels(ln.ListChannelsRequest()).channels
+    PendingHTLCs.objects.all().delete()
     for channel in channels:
-        exists = Channels.objects.filter(chan_id=channel.chan_id).count()
-        if exists == 1:
+        if Channels.objects.filter(chan_id=channel.chan_id).exists():
             #Update the channel record with the most current data
-            chan_data = stub.GetChanInfo(ln.ChanInfoRequest(chan_id=channel.chan_id))
-            if chan_data.node1_pub == channel.remote_pubkey:
-                local_policy = chan_data.node2_policy
-                remote_policy = chan_data.node1_policy
-            else:
-                local_policy = chan_data.node1_policy
-                remote_policy = chan_data.node2_policy
             db_channel = Channels.objects.filter(chan_id=channel.chan_id)[0]
-            db_channel.capacity = channel.capacity
-            db_channel.local_balance = channel.local_balance
-            db_channel.remote_balance = channel.remote_balance
-            db_channel.unsettled_balance = channel.unsettled_balance
-            db_channel.local_commit = channel.commit_fee
-            db_channel.local_chan_reserve = channel.local_chan_reserve_sat
-            db_channel.local_base_fee = local_policy.fee_base_msat
-            db_channel.local_fee_rate = local_policy.fee_rate_milli_msat
-            db_channel.remote_base_fee = remote_policy.fee_base_msat
-            db_channel.remote_fee_rate = remote_policy.fee_rate_milli_msat
-            db_channel.is_active = channel.active
-            db_channel.is_open = True
-            db_channel.save()
-        elif exists == 0:
+        else:
             #Create a record for this new channel
-            alias = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=channel.remote_pubkey)).node.alias
-            chan_data = stub.GetChanInfo(ln.ChanInfoRequest(chan_id=channel.chan_id))
-            if chan_data.node1_pub == channel.remote_pubkey:
-                local_policy = chan_data.node2_policy
-                remote_policy = chan_data.node1_policy
-            else:
-                local_policy = chan_data.node1_policy
-                remote_policy = chan_data.node2_policy
+            alias = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=channel.remote_pubkey, include_channels=False)).node.alias
             channel_point = channel.channel_point
             txid, index = channel_point.split(':')
             db_channel = Channels()
@@ -153,21 +126,40 @@ def update_channels(stub):
             db_channel.alias = alias
             db_channel.funding_txid = txid
             db_channel.output_index = index
-            db_channel.capacity = channel.capacity
-            db_channel.local_balance = channel.local_balance
-            db_channel.remote_balance = channel.remote_balance
-            db_channel.unsettled_balance = channel.unsettled_balance
-            db_channel.local_commit = channel.commit_fee
-            db_channel.local_chan_reserve = channel.local_chan_reserve_sat
-            db_channel.local_base_fee = local_policy.fee_base_msat
-            db_channel.local_fee_rate = local_policy.fee_rate_milli_msat
-            db_channel.remote_base_fee = remote_policy.fee_base_msat
-            db_channel.remote_fee_rate = remote_policy.fee_rate_milli_msat
-            db_channel.is_active = channel.active
-            db_channel.is_open = True
-            db_channel.save()
+        chan_data = stub.GetChanInfo(ln.ChanInfoRequest(chan_id=channel.chan_id))
+        if chan_data.node1_pub == channel.remote_pubkey:
+            local_policy = chan_data.node2_policy
+            remote_policy = chan_data.node1_policy
+        else:
+            local_policy = chan_data.node1_policy
+            remote_policy = chan_data.node2_policy
+        db_channel.capacity = channel.capacity
+        db_channel.local_balance = channel.local_balance
+        db_channel.remote_balance = channel.remote_balance
+        db_channel.unsettled_balance = channel.unsettled_balance
+        db_channel.local_commit = channel.commit_fee
+        db_channel.local_chan_reserve = channel.local_chan_reserve_sat
+        db_channel.local_base_fee = local_policy.fee_base_msat
+        db_channel.local_fee_rate = local_policy.fee_rate_milli_msat
+        db_channel.remote_base_fee = remote_policy.fee_base_msat
+        db_channel.remote_fee_rate = remote_policy.fee_rate_milli_msat
+        db_channel.is_active = channel.active
+        db_channel.is_open = True
+        db_channel.save()
         counter += 1
         chan_list.append(channel.chan_id)
+        if len(channel.pending_htlcs) > 0:
+            for htlc in channel.pending_htlcs:
+                pending_htlc = PendingHTLCs()
+                pending_htlc.chan_id = db_channel.chan_id
+                pending_htlc.alias = db_channel.alias
+                pending_htlc.incoming = htlc.incoming
+                pending_htlc.amount = htlc.amount
+                pending_htlc.hash_lock = htlc.hash_lock.hex()
+                pending_htlc.expiration_height = htlc.expiration_height
+                pending_htlc.forwarding_channel = htlc.forwarding_channel
+                pending_htlc.forwarding_alias = Channels.objects.filter(chan_id=htlc.forwarding_channel)[0].alias if Channels.objects.filter(chan_id=htlc.forwarding_channel).exists() else '---'
+                pending_htlc.save()
     records = Channels.objects.filter(is_open=True).count()
     if records > counter:
         #A channel must have been closed, mark it as closed
@@ -203,6 +195,13 @@ def update_peers(stub):
             peer.connected = False
             peer.save()
 
+def update_onchain(stub):
+    Onchain.objects.filter(block_height=0).delete()
+    last_block = 0 if Onchain.objects.aggregate(Max('block_height'))['block_height__max'] == None else Onchain.objects.aggregate(Max('block_height'))['block_height__max'] + 1
+    onchain_txs = stub.GetTransactions(ln.GetTransactionsRequest(start_height=last_block)).transactions
+    for tx in onchain_txs:
+        Onchain(tx_hash=tx.tx_hash, time_stamp=datetime.fromtimestamp(tx.time_stamp), amount=tx.amount, fee=tx.total_fees, block_hash=tx.block_hash, block_height=tx.block_height, label=tx.label[:100]).save()
+
 def reconnect_peers(stub):
     inactive_peers = Channels.objects.filter(is_open=True, is_active=False).values_list('remote_pubkey', flat=True).distinct()
     if len(inactive_peers) > 0:
@@ -218,8 +217,7 @@ def reconnect_peers(stub):
                         peer.save()
                     print('Attempting connection to:', inactive_peer)
                     node = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=inactive_peer, include_channels=False)).node
-                    host = node.addresses[-1].addr
-                    host = node.addresses[0].addr if host[0] == '[' else host
+                    host = node.addresses[0].addr
                     address = ln.LightningAddress(pubkey=inactive_peer, host=host)
                     stub.ConnectPeer(request = ln.ConnectPeerRequest(addr=address, perm=True, timeout=5))
                     peer.last_reconnected = datetime.now()
@@ -233,6 +231,7 @@ def main():
     update_payments(stub)
     update_invoices(stub)
     update_forwards(stub)
+    update_onchain(stub)
     reconnect_peers(stub)
 
 if __name__ == '__main__':

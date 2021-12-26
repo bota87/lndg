@@ -69,8 +69,8 @@ docker-compose up -d
 8. Generate some initial data for your dashboard `.venv/bin/python jobs.py`
 9. Run the server via a python development server `.venv/bin/python manage.py runserver 0.0.0.0:8889`
 
-### Step 2 - Setup Backend Data and Automated Rebalancing
-The files `jobs.py` and `rebalancer.py` inside lndg/gui/ serve to update the backend database with the most up to date information and rebalance any channels based on your lndg dashboard settings and requests. A refresh interval of at least 15-30 seconds is recommended for the best user experience.
+### Step 2 - Setup Backend Data, Automated Rebalancing and HTLC Stream Data
+The files `jobs.py`, `rebalancer.py` and `htlc_stream.py` inside lndg/gui/ serve to update the backend database with the most up to date information, rebalance any channels based on your lndg dashboard settings and to listen for any failure events in your htlc stream. A refresh interval of at least 10-20 seconds is recommended for the `jobs.py` and `rebalancer.py` files for the best user experience.
 
 Recommend Setup With Supervisord or Systemd
 1. Supervisord  
@@ -112,7 +112,13 @@ A bash script has been included to help aide in the setup of a nginx webserver. 
 ## Key Features
 ### API Backend
 The following data can be accessed at the /api endpoint:  
-`payments`  `paymenthops`  `invoices`  `forwards`  `onchain`  `peers`  `channels`  `rebalancer`  `settings`
+`payments`  `paymenthops`  `invoices`  `forwards`  `onchain`  `peers`  `channels`  `rebalancer`  `settings` `pendinghtlcs` `failedhtlcs`
+
+### Peer Reconnection
+LNDg will automatically try to resolve any channels that are seen as inactive, no more than every 3 minutes per peer.
+
+### HTLC Failure Stream
+LNDg will listen for failure events in your htlc stream and record them to the dashboard when they occur.
 
 ### Auto-Rebalancer
 Here are some notes to help you get started using the Auto-Rebalancer (AR).
@@ -122,7 +128,7 @@ The objective of the Auto-Rebalancer is to "refill" the liquidity on the local s
 1. The AR variable `AR-Enabled` must be set to 1 (enabled) in order to start looking for new rebalance opportunities.
 2. The AR variable `AR-Target%` defines the % size of the channel capacity you would like to use for rebalance attempts. Example: If a channel size is 1M Sats and AR-Target% = 0.05 LNDg will select an amount of 5% of 1M = 50K for rebalancing.
 3. The AR variable `AR-Time` defines the maximum amount of time we will spend looking for a route. Example: 5 minutes
-4. The AR variable `AR-MaxFeeRate` defines the maximum amount in ppm a rebalance attempt can ever use for a fee limit. This is the maximum limit to ensure the total fee does not exceed this amount. Example: AR-MaxFeeRate = 800 will ensure the rebalance fee is always less than 800 sats.
+4. The AR variable `AR-MaxFeeRate` defines the maximum amount in ppm a rebalance attempt can ever use for a fee limit. This is the maximum limit to ensure the total fee does not exceed this amount. Example: AR-MaxFeeRate = 800 will ensure the rebalance fee is always less than 800 ppm.
 5. The AR variable `AR-MaxCost%	` defines the maximum % of the ppm being charged on the `INBOUND` receving channel that will be used as the fee limit for the rebalance attempt. Example: If your fee to node A is 1000ppm and AR-MaxCost% = 0.5 LNDg will use 50% of 1000ppm = 500ppm max fee limit for rebalancing.
 6. The AR variable `AR-Outbound%` helps identify all the channels that would be a candidate for rebalancing targetd channels. Rebalances will only consider any `OUTBOUND` channel that has more outbound liquidity than the current `AR-Outbound%` setting AND the channel is not currently being targeted as an `INBOUND` receving channel for rebalances.  Example: AR-Outboud% = 0.6 would make all channels with an outbound capacity of 60% or more AND not enabled under AR on the channel line to be a candidate for rebalancing. 
 7. Channels need to be targeted in order to be refilled with outbound liquidity and in order to control costs as a first prioirty, all calculations are based on the specific `INBOUND` receving channel.

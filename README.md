@@ -8,8 +8,11 @@ Start by choosing one of the following installation methods:
 ### Build and deploy
 1. Clone respository `git clone https://github.com/cryptosharks131/lndg.git`
 2. Change directory into the repo `cd lndg`
-3. Customize `docker-compose.yaml` if you like and then build/deploy your docker image: `docker-compose up -d`
-4. LNDg should now be available on port `8889`
+3. Initialize db and admin backup `touch db.sqlite3 && touch lndg-admin.txt`
+4. Update `docker-compose.yaml` if you are a non-root user and then build/deploy your docker image: `docker-compose up -d`
+5. LNDg should now be available on port `8889`
+6. Open and copy the password from output file: `nano lndg-admin.txt`
+7. Use the password from the output file and the username `lndg-admin` to login
 
 ### Updating
 ```
@@ -18,16 +21,12 @@ docker-compose build --no-cache
 docker-compose up -d
 ```
 
-### Notes
-1. Unless you save your `db.sqlite3` file before destroying your container, this data will be lost and rebuilt when making a new container. However, some data such as rebalances from previous containers cannot be rebuilt.
-2. You can make this file persist by initializing it first locally `touch /root/lndg/db.sqlite3` and then mapping it locally in your docker-compose file under the volumes. `/root/lndg/db.sqlite3:/lndg/db.sqlite3:rw`
-
 ## Umbrel Installation
 ### Build and deploy
 1. Log into your umbrel via ssh
 2. Clone respository `git clone https://github.com/cryptosharks131/lndg.git`
 3. Change directory `cd lndg`
-4. Initialize the database file `touch db.sqlite3`
+4. Initialize db and admin backup `touch db.sqlite3 && touch lndg-admin.txt`
 5. Copy and replace the contents of the docker-compose.yaml with the below: `nano docker-compose.yaml`
 ```
 services:
@@ -36,10 +35,11 @@ services:
     volumes:
       - /home/umbrel/umbrel/lnd:/root/.lnd:ro
       - /home/umbrel/lndg/db.sqlite3:/lndg/db.sqlite3:rw
+      - /home/umbrel/lndg/lndg-admin.txt:/lndg/lndg-admin.txt:rw
     command:
       - sh
       - -c
-      - python initialize.py -net 'mainnet' -server '10.21.21.9:10009' -d && python manage.py migrate && python manage.py collectstatic --no-input && supervisord && python manage.py runserver 0.0.0.0:8000
+      - python initialize.py -net 'mainnet' -server '10.21.21.9:10009' -d && supervisord && python manage.py runserver 0.0.0.0:8000
     ports:
       - 8889:8000
 networks: 
@@ -49,6 +49,8 @@ networks:
 ```
 5. Deploy your docker image: `docker-compose up -d`
 6. You can now access LNDg via your browser on port 8889: `http://umbrel.local:8889`
+7. Open and copy the password from output file: `nano lndg-admin.txt`
+8. Use the password from the output file and the username `lndg-admin` to login
 
 ### Updating
 ```
@@ -65,9 +67,10 @@ docker-compose up -d
 4. Setup a python3 virtual environment `virtualenv -p python3 .venv`
 5. Install required dependencies `.venv/bin/pip install -r requirements.txt`
 6. Initialize some settings for your django site (see notes below) `.venv/bin/python initialize.py`
-7. Migrate all database objects `.venv/bin/python manage.py migrate`
+7. The initial login user is `lndg-admin` and the password is output here: `lndg-admin.txt`
 8. Generate some initial data for your dashboard `.venv/bin/python jobs.py`
-9. Run the server via a python development server `.venv/bin/python manage.py runserver 0.0.0.0:8889`
+9. Run the server via a python development server `.venv/bin/python manage.py runserver 0.0.0.0:8889`  
+Tip: If you plan to only use the development server, you will need to setup whitenoise (see note below).  
 
 ### Step 2 - Setup Backend Data, Automated Rebalancing and HTLC Stream Data
 The files `jobs.py`, `rebalancer.py` and `htlc_stream.py` inside lndg/gui/ serve to update the backend database with the most up to date information, rebalance any channels based on your lndg dashboard settings and to listen for any failure events in your htlc stream. A refresh interval of at least 10-20 seconds is recommended for the `jobs.py` and `rebalancer.py` files for the best user experience.
@@ -84,11 +87,18 @@ Recommend Setup With Supervisord or Systemd
   
 Alternatively, you may also make your own task for these files with your preferred tool (task scheduler/cronjob/etc).  
 
+### Updating
+1. Make sure you are in the lndg folder `cd lndg`
+2. Pull the new files `git pull`
+3. Migrate any database changes `.venv/bin/python manage.py migrate`
+
 ### Notes
 1. If you are not using the default settings for LND or you would like to run a LND instance on a network other than `mainnet` you can use the correct flags in step 6 (see `initialize.py --help`) or you can edit the variables directly in `lndg/lndg/settings.py`.  
 2. Some systems have a hard time serving static files (docker/macOs) and installing whitenoise and configuring it can help solve this issue. You can use `initialize.py -wn` to setup whitenoise and install it with `.venv/bin/pip install whitenoise`.  
 3. If you want to recreate a settings file, delete it from `lndg/lndg/settings.py` and rerun. `initialize.py`  
-4. If you plan to run this site continuously, consider setting up a proper web server to host it (see Nginx below).  
+4. If you plan to run this site continuously, consider setting up a proper web server to host it (see Nginx below). 
+5. You can manage your login credentials from the admin page. Example: `lndg.local/lndg-admin` 
+6. If you have issues reaching the site, verify the firewall is open on port 8889 where LNDg is running
 
 ### Setup lndg initialize.py options
 1. `-ip` or `--nodeip` - Accepts only this host IP to serve the LNDg page - default: `*`
@@ -96,18 +106,14 @@ Alternatively, you may also make your own task for these files with your preferr
 3. `-net` or `--network` - Network LND will run over - default: `mainnet`
 4. `-server` or `--rpcserver` - Server address to use for rpc communications with LND - default: `localhost:10009`
 5. `-sd` or `--supervisord` - Setup supervisord to run jobs/rebalancer background processes - default: `False`
-6. `-wn` or `--whitenoise` - Add whitenoise middleware (docker requirement for static files) - default: `False`
-7. `-d` or `--docker` - Single option for docker container setup (supervisord + whitenoise) - default: `False`
-8. `-dx` or `--debug` - Setup the django site in debug mode - default: `False`
+6. `-sdu` or `--sduser` - Configure supervisord with a non-root user - default: `root`
+7. `-wn` or `--whitenoise` - Add whitenoise middleware (docker requirement for static files) - default: `False`
+8. `-d` or `--docker` - Single option for docker container setup (supervisord + whitenoise) - default: `False`
+9. `-dx` or `--debug` - Setup the django site in debug mode - default: `False`
+10. `-pw` or `--adminpw` Setup a custom admin password - default: `Randomized`
 
-### Updating
-1. Make sure you are in the lndg folder `cd lndg`
-2. Pull the new files `git pull`
-3. Migrate any database changes `.venv/bin/python manage.py migrate`
-
-### Nginx Webserver
-If you would like to serve the dashboard at all times, it is recommended to setup a proper production webserver to host the site.  
-A bash script has been included to help aide in the setup of a nginx webserver. `sudo bash nginx.sh`
+### Using A Webserver
+You can serve the dashboard at all times using a webserver instead of the development server.  Using a webserver will serve your static files and installing whitenoise is not required when running in this manner. Any webserver can be used to host the site if configured properly. A bash script has been included to help aide in the setup of a nginx webserver. `sudo bash nginx.sh`
 
 ## Key Features
 ### API Backend
@@ -116,6 +122,12 @@ The following data can be accessed at the /api endpoint:
 
 ### Peer Reconnection
 LNDg will automatically try to resolve any channels that are seen as inactive, no more than every 3 minutes per peer.
+
+### Suggests New Peers
+LNDg will make suggestions for new peers to open channels to based on your node's successful routing history.
+
+### Suggests AR Actions
+LNDg will make suggestions for actions to take around Auto-Rebalancing.
 
 ### HTLC Failure Stream
 LNDg will listen for failure events in your htlc stream and record them to the dashboard when they occur.
@@ -167,17 +179,22 @@ If you want a channel not to be picked for rebalancing (i.e. it is already full 
 
 ## Preview Screens
 ### Main Dashboard
-![image](https://user-images.githubusercontent.com/38626122/139308280-13b14393-c5f0-4e2a-8acc-9d87f5c83684.png)
-![image](https://user-images.githubusercontent.com/38626122/137809328-c64c038b-8dbb-40a2-aeb3-a1bae5554d7a.png)
-![image](https://user-images.githubusercontent.com/38626122/137809356-ec46193a-478c-424b-a184-2b15cfbb5c52.png)
-![image](https://user-images.githubusercontent.com/38626122/137809433-b363fff1-31b6-4b0e-80e9-1916ef0af052.png)
-![image](https://user-images.githubusercontent.com/38626122/137809648-bb191ba9-b989-4325-95ac-d25a8333ae62.png)
+![image](https://user-images.githubusercontent.com/38626122/148699177-d10d412e-641e-4676-acac-2047e7e2d7a6.png)
+![image](https://user-images.githubusercontent.com/38626122/148699209-667936fd-c56f-484f-8dd4-75e052c8c14f.png)
+![image](https://user-images.githubusercontent.com/38626122/148699224-efb70fcf-0b7e-45cf-bd98-de833b2cff88.png)
+![image](https://user-images.githubusercontent.com/38626122/148699273-be470d86-e76c-4935-8337-2b9737aed73e.png)
+![image](https://user-images.githubusercontent.com/38626122/148699286-0b1d2c13-191a-4c6c-99ae-ce3d8b8ac64d.png)
 ![image](https://user-images.githubusercontent.com/38626122/137809583-db743233-25c1-4d3e-aaec-2a7767de2c9f.png)
 
-### Peers, Balances, Routes and Pending HTLCs All Open In Separate Screens
+### Peers, Balances, Routes, Keysends and Pending HTLCs All Open In Separate Screens
 ![image](https://user-images.githubusercontent.com/38626122/137809809-1ed40cfb-9d12-447a-8e5e-82ae79605895.png)
 ![image](https://user-images.githubusercontent.com/38626122/137810021-4f69dcb0-5fce-4062-bc49-e75f5dd0feda.png)
 ![image](https://user-images.githubusercontent.com/38626122/137809882-4a87f86d-290c-456e-9606-ed669fd98561.png)
+![image](https://user-images.githubusercontent.com/38626122/148699417-bd9fbb49-72f5-4c3f-811f-e18c990a06ba.png)
+
+### Suggests Peers To Open With and Rebalancer Actions To Take
+![image](https://user-images.githubusercontent.com/38626122/148699445-88efeacd-3cfc-429c-91d8-3a52ee633195.png)
+![image](https://user-images.githubusercontent.com/38626122/148699467-62ebbd7d-9f36-4707-88fd-62f2cc2a5506.png)
 
 ### Browsable API at `/api` (json format available with url appended with `?format=json`)
 ![image](https://user-images.githubusercontent.com/38626122/137810278-7f38ac5b-8932-4953-aa4c-9c29d66dce0c.png)

@@ -55,8 +55,7 @@ class RebalancerSerializer(serializers.HyperlinkedModelSerializer):
         exclude = []
 
 class ConnectPeerSerializer(serializers.Serializer):
-    peer_pubkey = serializers.CharField(label='peer_pubkey', max_length=66)
-    host = serializers.CharField(label='host', max_length=120)
+    peer_id = serializers.CharField(label='peer_pubkey', max_length=200)
 
 class OpenChannelSerializer(serializers.Serializer):
     peer_pubkey = serializers.CharField(label='peer_pubkey', max_length=66)
@@ -64,8 +63,7 @@ class OpenChannelSerializer(serializers.Serializer):
     sat_per_byte = serializers.IntegerField(label='sat_per_btye')
 
 class CloseChannelSerializer(serializers.Serializer):
-    funding_txid = serializers.CharField(label='funding_txid', max_length=64)
-    output_index = serializers.IntegerField(label='output_index')
+    chan_id = serializers.IntegerField(label='chan_id')
     target_fee = serializers.IntegerField(label='target_fee')
     force = serializers.BooleanField(default=False)
 

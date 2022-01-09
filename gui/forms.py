@@ -33,14 +33,12 @@ class OpenChannelForm(forms.Form):
     sat_per_byte = forms.IntegerField(label='sat_per_btye')
 
 class CloseChannelForm(forms.Form):
-    funding_txid = forms.CharField(label='funding_txid', max_length=64)
-    output_index = forms.IntegerField(label='output_index')
+    chan_id = forms.IntegerField(label='chan_id')
     target_fee = forms.IntegerField(label='target_fee')
     force = forms.BooleanField(widget=forms.CheckboxSelectMultiple, required=False)
 
 class ConnectPeerForm(forms.Form):
-    peer_pubkey = forms.CharField(label='peer_pubkey', max_length=66)
-    host = forms.CharField(label='host', max_length=120)
+    peer_id = forms.CharField(label='peer_pubkey', max_length=200)
 
 class AddInvoiceForm(forms.Form):
     value = forms.IntegerField(label='value')

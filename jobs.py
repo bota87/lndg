@@ -1,23 +1,13 @@
 import django
-from django.conf import settings
 from django.db.models import Max
-from pathlib import Path
 from datetime import datetime
 from gui.lnd_deps import lightning_pb2 as ln
 from gui.lnd_deps import lightning_pb2_grpc as lnrpc
 from gui.lnd_deps.lnd_connect import lnd_connect
-
-BASE_DIR = Path(__file__).resolve().parent
-settings.configure(
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3'
-        }
-    }
-)
-django.setup()
 from lndg import settings
+from os import environ
+environ['DJANGO_SETTINGS_MODULE'] = 'lndg.settings'
+django.setup()
 from gui.models import Payments, PaymentHops, Invoices, Forwards, Channels, Peers, Onchain, PendingHTLCs
 
 def update_payments(stub):
@@ -35,11 +25,17 @@ def update_payments(stub):
                     if attempt.status == 1:
                         hops = attempt.route.hops
                         hop_count = 0
+                        cost_to = 0
                         total_hops = len(hops)
                         for hop in hops:
                             hop_count += 1
-                            alias = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=hop.pub_key, include_channels=False)).node.alias
-                            PaymentHops(payment_hash=new_payment, attempt_id=attempt.attempt_id, step=hop_count, chan_id=hop.chan_id, alias=alias, chan_capacity=hop.chan_capacity, node_pubkey=hop.pub_key, amt=round(hop.amt_to_forward_msat/1000, 3), fee=round(hop.fee_msat/1000, 3)).save()
+                            try:
+                                alias = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=hop.pub_key, include_channels=False)).node.alias
+                            except:
+                                alias = ''
+                            fee = hop.fee_msat/1000
+                            PaymentHops(payment_hash=new_payment, attempt_id=attempt.attempt_id, step=hop_count, chan_id=hop.chan_id, alias=alias, chan_capacity=hop.chan_capacity, node_pubkey=hop.pub_key, amt=round(hop.amt_to_forward_msat/1000, 3), fee=round(fee, 3), cost_to=round(cost_to, 3)).save()
+                            cost_to += fee
                             if hop_count == 1:
                                 new_payment.chan_out = hop.chan_id
                                 new_payment.chan_out_alias = alias
@@ -63,13 +59,17 @@ def update_payments(stub):
             if payment.status == 2:
                 for attempt in payment.htlcs:
                     if attempt.status == 1:
+                        PaymentHops.objects.filter(payment_hash=db_payment).delete()
                         hops = attempt.route.hops
                         hop_count = 0
                         cost_to = 0
                         total_hops = len(hops)
                         for hop in hops:
                             hop_count += 1
-                            alias = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=hop.pub_key, include_channels=False)).node.alias
+                            try:
+                                alias = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=hop.pub_key, include_channels=False)).node.alias
+                            except:
+                                alias = ''
                             fee = hop.fee_msat/1000
                             PaymentHops(payment_hash=db_payment, attempt_id=attempt.attempt_id, step=hop_count, chan_id=hop.chan_id, alias=alias, chan_capacity=hop.chan_capacity, node_pubkey=hop.pub_key, amt=round(hop.amt_to_forward_msat/1000, 3), fee=round(fee, 3), cost_to=round(cost_to, 3)).save()
                             cost_to += fee

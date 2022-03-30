@@ -9,6 +9,8 @@ router.register(r'paymenthops', views.PaymentHopsViewSet)
 router.register(r'invoices', views.InvoicesViewSet)
 router.register(r'forwards', views.ForwardsViewSet)
 router.register(r'onchain', views.OnchainViewSet)
+router.register(r'closures', views.ClosuresViewSet)
+router.register(r'resolutions', views.ResolutionsViewSet)
 router.register(r'peers', views.PeersViewSet)
 router.register(r'channels', views.ChannelsViewSet)
 router.register(r'rebalancer', views.RebalancerViewSet)
@@ -21,11 +23,15 @@ urlpatterns = [
     path('route', views.route, name='route'),
     path('peers', views.peers, name='peers'),
     path('balances', views.balances, name='balances'),
+    path('closures', views.closures, name='closures'),
+    path('resolutions', views.resolutions, name='resolutions'),
+    path('channel', views.channel, name='channel'),
     path('pending_htlcs', views.pending_htlcs, name='pending-htlcs'),
     path('failed_htlcs', views.failed_htlcs, name='failed-htlcs'),
     path('payments', views.payments, name='payments'),
     path('invoices', views.invoices, name='invoices'),
     path('forwards', views.forwards, name='forwards'),
+    path('rebalancing', views.rebalancing, name='rebalancing'),
     path('openchannel/', views.open_channel_form, name='open-channel-form'),
     path('closechannel/', views.close_channel_form, name='close-channel-form'),
     path('connectpeer/', views.connect_peer_form, name='connect-peer-form'),
@@ -36,11 +42,13 @@ urlpatterns = [
     path('autorebalance/', views.auto_rebalance, name='auto-rebalance'),
     path('update_channel/', views.update_channel, name='update-channel'),
     path('update_setting/', views.update_setting, name='update-setting'),
-    path('suggested_opens/', views.suggested_opens, name='suggested-opens'),
-    path('suggested_actions/', views.suggested_actions, name='suggested-actions'),
+    path('opens/', views.opens, name='opens'),
+    path('actions/', views.actions, name='actions'),
+    path('fees/', views.fees, name='fees'),
     path('keysends/', views.keysends, name='keysends'),
     path('channels/', views.channels, name='channels'),
     path('autopilot/', views.autopilot, name='autopilot'),
+    path('autofees/', views.autofees, name='autofees'),
     path('advanced/', views.advanced, name='advanced'),
     path('api/', include(router.urls), name='api-root'),
     path('api-auth/', include('rest_framework.urls'), name='api-auth'),

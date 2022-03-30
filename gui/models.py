@@ -9,10 +9,12 @@ class Payments(models.Model):
     fee = models.FloatField()
     status = models.IntegerField()
     index = models.IntegerField()
-    chan_out = models.IntegerField(null=True)
+    chan_out = models.CharField(max_length=20, null=True)
     chan_out_alias = models.CharField(null=True, max_length=32)
     keysend_preimage = models.CharField(null=True, max_length=64)
-    message = models.CharField(null=True, max_length=255)
+    message = models.CharField(null=True, max_length=1000)
+    cleaned = models.BooleanField(default=False)
+    rebal_chan = models.CharField(max_length=20, null=True)
     class Meta:
         app_label = 'gui'
 
@@ -20,7 +22,7 @@ class PaymentHops(models.Model):
     payment_hash = models.ForeignKey('Payments', on_delete=models.CASCADE)
     attempt_id = models.IntegerField()
     step = models.IntegerField()
-    chan_id = models.IntegerField()
+    chan_id = models.CharField(max_length=20)
     alias = models.CharField(max_length=32)
     chan_capacity = models.BigIntegerField()
     node_pubkey = models.CharField(max_length=66)
@@ -38,18 +40,20 @@ class Invoices(models.Model):
     value = models.FloatField()
     amt_paid = models.BigIntegerField()
     state = models.IntegerField()
-    chan_in = models.IntegerField(null=True)
+    chan_in = models.CharField(max_length=20, null=True)
     chan_in_alias = models.CharField(null=True, max_length=32)
     keysend_preimage = models.CharField(null=True, max_length=64)
-    message = models.CharField(null=True, max_length=255)
+    message = models.CharField(null=True, max_length=1000)
+    sender = models.CharField(null=True, max_length=66)
+    sender_alias = models.CharField(null=True, max_length=32)
     index = models.IntegerField()
     class Meta:
         app_label = 'gui'
 
 class Forwards(models.Model):
     forward_date = models.DateTimeField()
-    chan_id_in = models.IntegerField()
-    chan_id_out = models.IntegerField()
+    chan_id_in = models.CharField(max_length=20)
+    chan_id_out = models.CharField(max_length=20)
     chan_in_alias = models.CharField(null=True, max_length=32)
     chan_out_alias = models.CharField(null=True, max_length=32)
     amt_in_msat = models.BigIntegerField()
@@ -60,7 +64,7 @@ class Forwards(models.Model):
 
 class Channels(models.Model):
     remote_pubkey = models.CharField(max_length=66)
-    chan_id = models.IntegerField(primary_key=True)
+    chan_id = models.CharField(max_length=20, primary_key=True)
     funding_txid = models.CharField(max_length=64)
     output_index = models.IntegerField()
     capacity = models.BigIntegerField()
@@ -72,16 +76,28 @@ class Channels(models.Model):
     num_updates = models.IntegerField()
     initiator = models.BooleanField()
     alias = models.CharField(max_length=32)
+    total_sent = models.BigIntegerField()
+    total_received = models.BigIntegerField()
+    private = models.BooleanField()
+    pending_outbound = models.BigIntegerField()
+    pending_inbound = models.BigIntegerField()
+    htlc_count = models.IntegerField()
     local_base_fee = models.IntegerField()
     local_fee_rate = models.IntegerField()
+    local_disabled = models.BooleanField()
     remote_base_fee = models.IntegerField()
     remote_fee_rate = models.IntegerField()
+    remote_disabled = models.BooleanField()
     is_active = models.BooleanField()
     is_open = models.BooleanField()
+    last_update = models.DateTimeField()
     auto_rebalance = models.BooleanField(default=False)
     ar_amt_target = models.BigIntegerField()
     ar_in_target = models.IntegerField(default=100)
     ar_out_target = models.IntegerField()
+    ar_max_cost = models.IntegerField()
+    fees_updated = models.DateTimeField(default=timezone.now)
+    auto_fees = models.BooleanField(default=False)
 
     def save(self, *args, **kwargs):
         if not self.ar_out_target:
@@ -98,6 +114,13 @@ class Channels(models.Model):
                 LocalSettings(key='AR-Target%', value='0.05').save()
                 amt_setting = 0.05
             self.ar_amt_target = int(amt_setting * self.capacity)
+        if not self.ar_max_cost:
+            if LocalSettings.objects.filter(key='AR-MaxCost%').exists():
+                cost_setting = float(LocalSettings.objects.filter(key='AR-MaxCost%')[0].value)
+            else:
+                LocalSettings(key='AR-MaxCost%', value='0.65').save()
+                cost_setting = 0.65
+            self.ar_max_cost = int(cost_setting * 100)
         super(Channels, self).save(*args, **kwargs)
 
     class Meta:
@@ -105,6 +128,7 @@ class Channels(models.Model):
 
 class Peers(models.Model):
     pubkey = models.CharField(max_length=66, primary_key=True)
+    alias = models.CharField(null=True, max_length=32)
     address = models.CharField(max_length=100)
     sat_sent = models.BigIntegerField()
     sat_recv = models.BigIntegerField()
@@ -146,8 +170,37 @@ class Onchain(models.Model):
     class Meta:
         app_label = 'gui'
 
+class Closures(models.Model):
+    chan_id = models.CharField(max_length=20)
+    funding_txid = models.CharField(max_length=64)
+    funding_index = models.IntegerField()
+    closing_tx = models.CharField(max_length=64)
+    remote_pubkey = models.CharField(max_length=66)
+    capacity = models.BigIntegerField()
+    close_height = models.IntegerField()
+    settled_balance = models.BigIntegerField()
+    time_locked_balance = models.BigIntegerField()
+    close_type = models.IntegerField()
+    open_initiator = models.IntegerField()
+    close_initiator = models.IntegerField()
+    resolution_count = models.IntegerField()
+    class Meta:
+        app_label = 'gui'
+        unique_together = (('funding_txid', 'funding_index'),)
+
+class Resolutions(models.Model):
+    chan_id = models.CharField(max_length=20)
+    resolution_type = models.IntegerField()
+    outcome = models.IntegerField()
+    outpoint_tx = models.CharField(max_length=64)
+    outpoint_index = models.IntegerField()
+    amount_sat = models.BigIntegerField()
+    sweep_txid = models.CharField(max_length=64)
+    class Meta:
+        app_label = 'gui'
+
 class PendingHTLCs(models.Model):
-    chan_id = models.IntegerField()
+    chan_id = models.CharField(max_length=20)
     alias = models.CharField(max_length=32)
     incoming = models.BooleanField()
     amount = models.BigIntegerField()
@@ -161,10 +214,12 @@ class PendingHTLCs(models.Model):
 class FailedHTLCs(models.Model):
     timestamp = models.DateTimeField(default=timezone.now)
     amount = models.IntegerField()
-    chan_id_in = models.IntegerField()
-    chan_id_out = models.IntegerField()
+    chan_id_in = models.CharField(max_length=20)
+    chan_id_out = models.CharField(max_length=20)
     chan_in_alias = models.CharField(null=True, max_length=32)
     chan_out_alias = models.CharField(null=True, max_length=32)
+    chan_out_liq = models.BigIntegerField(null=True)
+    chan_out_pending = models.BigIntegerField(null=True)
     wire_failure = models.IntegerField()
     failure_detail = models.IntegerField()
     missed_fee = models.FloatField()
@@ -173,7 +228,17 @@ class FailedHTLCs(models.Model):
 
 class Autopilot(models.Model):
     timestamp = models.DateTimeField(default=timezone.now)
-    chan_id = models.IntegerField()
+    chan_id = models.CharField(max_length=20)
+    peer_alias = models.CharField(max_length=32)
+    setting = models.CharField(max_length=20)
+    old_value = models.IntegerField()
+    new_value = models.IntegerField()
+    class Meta:
+        app_label = 'gui'
+
+class Autofees(models.Model):
+    timestamp = models.DateTimeField(default=timezone.now)
+    chan_id = models.CharField(max_length=20)
     peer_alias = models.CharField(max_length=32)
     setting = models.CharField(max_length=20)
     old_value = models.IntegerField()
